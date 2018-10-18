@@ -4,7 +4,7 @@ android {
     compileSdkVersion 28
     defaultConfig {
         applicationId "com.xfhy.component"
-        minSdkVersion 21
+        minSdkVersion 19
         targetSdkVersion 28
         versionCode 1
         versionName "1.0"
@@ -35,5 +35,7 @@ dependencies {
     implementation project(':Base')
     implementation project(':Login')
     implementation project(':Share')
+    // arouter-compiler 的注解依赖需要所有使用 ARouter 的 module 都添加依赖
+    annotationProcessor 'com.alibaba:arouter-compiler:1.1.4'
 
 }

@@ -9,11 +9,11 @@ import com.xfhy.componentbase.service.IAccountService;
 public class AccountService implements IAccountService {
     @Override
     public boolean isLogin() {
-        return UserInfo.getUserInfo() != null;
+        return AccountUtils.userInfo != null;
     }
 
     @Override
     public String getAccountId() {
-        return UserInfo.getUserInfo() == null ? null : UserInfo.getUserInfo().accountId;
+        return AccountUtils.userInfo == null ? null : AccountUtils.userInfo.accountId;
     }
 }

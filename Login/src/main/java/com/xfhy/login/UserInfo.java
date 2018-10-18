@@ -7,14 +7,11 @@ package com.xfhy.login;
 public class UserInfo {
 
     public String accountId;
+    public String password;
 
-    /**
-     * 获取用户信息  测试
-     */
-    public static UserInfo getUserInfo() {
-        UserInfo userInfo = new UserInfo();
-        userInfo.accountId = "test";
-        return userInfo;
+    public UserInfo(String accountId, String password) {
+        this.accountId = accountId;
+        this.password = password;
     }
 
 }
