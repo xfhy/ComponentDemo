@@ -1,4 +1,3 @@
-> 本项目是参考的:https://github.com/renxuelong/ComponentDemo
 
 ## 演示为先
 ![](http://odgw9c93i.bkt.clouddn.com//FmkhuM5aV97FZBUO_w_nEyOTCrFK)
@@ -334,4 +333,491 @@ public class ShareActivity extends AppCompatActivity {
 
 上面提到了由于 Application 的替换原则，在主模块中有 Application 等情况下，组件在集中调试时其 Applicaiton 不会初始化的问题。而我们组件的 Service 在 ServiceFactory 的注册又必须放到组件初始化的地方。
 
-为了解决这个问题可以将组件的 Service 类强引用到主 Module 的 Application 中进行初始化，这就必须要求
+为了解决这个问题可以将组件的 Service 类强引用到主 Module 的 Application 中进行初始化，这就必须要求主模块可以直接访问组件中的类。而我们又不想在开发过程中主模块能访问组件中的类，这里可以通过反射来实现组件 Application 的初始化。
+
+##### 1）第一步：在 Base 模块中定义抽象类 BaseApp 继承 Application，里面定义了两个方法，initModeApp 是初始化当前组件时需要调用的方法，initModuleData 是所有组件的都初始化后再调用的方法。
+```
+// Base 模块中定义
+public abstract class BaseApp extends Application {
+    /**
+     * Application 初始化
+     */
+    public abstract void initModuleApp(Application application);
+
+    /**
+     * 所有 Application 初始化后的自定义操作
+     */
+    public abstract void initModuleData(Application application);
+}
+```
+
+##### 2）第二步：所有的组件的 Application 都继承 BaseApp，并在对应的方法中实现操作，我们这里还是以 Login 组件为例，其 LoginApp 实现了 BaseApp 接口，其 initModuleApp 方法中完成了在 ServiceFactory 中注册自己的 Service 对象。在单独调试时 onCreate() 方法中也会调用 initModuleApp() 方法完成在 ServiceFactory 中的注册操作。
+
+```
+// Login 组件的 LoginApp
+public class LoginApp extends BaseApp {
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        initModuleApp(this);
+        initModuleData(this);
+    }
+
+    @Override
+    public void initModuleApp(Application application) {
+        ServiceFactory.getInstance().setAccountService(new AccountService());
+    }
+
+    @Override
+    public void initModuleData(Application application) {
+
+    }
+}
+```
+##### 3）第三步：在 Base 模块中定义 AppConfig 类，其中的 moduleApps 是一个静态的 String 数组，我们将需要初始化的组件的 Application 的完整类名放入到这个数组中。
+
+```
+// Base 模块的 AppConfig
+public class AppConfig {
+    private static final String LoginApp = "com.loong.login.LoginApp";
+
+    public static String[] moduleApps = {
+            LoginApp
+    };
+}
+```
+##### 4）第四步：主 module 的 Application 也继承 BaseApp ，并实现两个初始化方法，在这两个初始化方法中遍历 AppcConfig 类中定义的 moduleApps 数组中的类名，通过反射，初始化各个组件的 Application。
+
+```
+// 主 Module 的 Applicaiton
+public class MainApplication extends BaseApp {
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        
+        // 初始化组件 Application
+        initModuleApp(this);
+        
+        // 其他操作
+        
+        // 所有 Application 初始化后的操作
+        initModuleData(this);
+        
+    }
+
+    @Override
+    public void initModuleApp(Application application) {
+        for (String moduleApp : AppConfig.moduleApps) {
+            try {
+                Class clazz = Class.forName(moduleApp);
+                BaseApp baseApp = (BaseApp) clazz.newInstance();
+                baseApp.initModuleApp(this);
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
+            } catch (InstantiationException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Override
+    public void initModuleData(Application application) {
+        for (String moduleApp : AppConfig.moduleApps) {
+            try {
+                Class clazz = Class.forName(moduleApp);
+                BaseApp baseApp = (BaseApp) clazz.newInstance();
+                baseApp.initModuleData(this);
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
+            } catch (InstantiationException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+```
+
+到这里我们就通过反射，完成了组件 Application 的初始化操作，也实现了组件与化中的解耦需求。
+
+### 四、组件间界面跳转
+
+Android 中的界面跳转，主要有显式 Intent 和隐式 Intent 两种。在同一个组件中，因为类可以自由访问，所以界面跳转可以通过显式 Intent 的方式实现。而在组件化开发中，由于不同组件式没有相互依赖的，所以不可以直接访问彼此的类，这时候就没办法通过显式的方式实现了。
+
+Android 中提供的隐式 Intent 的方式可以实现这个需求，但是隐式 Intent 需要通过 AndroidManifest 集中管理，协作开发比较麻烦。所以在这里我们采取更加灵活的一种方式，使用 Alibaba 开源的 [ARouter](https://github.com/alibaba/ARouter) 来实现。
+
+> 一个用于帮助 Android App 进行组件化改造的框架 —— 支持模块间的路由、通信、解耦
+
+由 github 上 ARouter 的介绍可以知道，它可以实现组件间的路由功能。路由是指从一个接口上收到数据包，根据数据路由包的目的地址进行定向并转发到另一个接口的过程。这里可以体现出路由跳转的特点，非常适合组件化解耦。
+
+要使用 ARouter 进行界面跳转，需要我们的组件对 Arouter 添加依赖，因为所有的组件都依赖了 Base 模块，所以我们在 Base 模块中添加 ARouter 的依赖即可。其它组件共同依赖的库也最好都放到 Base 中统一依赖。
+
+这里需要注意的是，arouter-compiler 的依赖需要所有使用到 ARouter 的模块和组件中都单独添加，不然无法在 apt 中生成索引文件，也就无法跳转成功。并且在每一个使用到 ARouter 的模块和组件的 build.gradle 文件中，其 android{} 中的 javaCompileOptions 中也需要添加特定配置。
+
+```
+// Base 模块的 build.gradle
+dependencies {
+    api 'com.alibaba:arouter-api:1.3.1'
+    // arouter-compiler 的注解依赖需要所有使用 ARouter 的 module 都添加依赖
+    annotationProcessor 'com.alibaba:arouter-compiler:1.1.4'
+}
+```
+```
+// 所有使用到 ARouter 的组件和模块的 build.gradle
+android {
+    defaultConfig {
+        ...
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = [ moduleName : project.getName() ]
+            }
+        }
+    }
+}
+
+dependencies {
+    ...
+    implementation project (':base')
+    annotationProcessor 'com.alibaba:arouter-compiler:1.1.4'
+}
+```
+```
+// 主项目的 build.gradle 需要添加对 login 组件和 share 组件的依赖
+dependencies {
+    // ... 其他
+    implementation project(':login')
+    implementation project(':share')
+}
+```
+
+添加了对 ARouter 的依赖后，还需要在项目的 Application 中将 ARouter 初始化，我们这里将 ARouter 的初始化工作放到主项目 Application 的 onCreate 方法中，在应用启动的同时将 ARouter 初始化。
+
+```
+// 主项目的 Application
+public class MainApplication extends Application {
+    @Override
+    public void onCreate() {
+        super.onCreate();
+
+        // 初始化 ARouter
+        if (isDebug()) {           
+            // 这两行必须写在init之前，否则这些配置在init过程中将无效
+            
+            // 打印日志
+            ARouter.openLog();     
+            // 开启调试模式(如果在InstantRun模式下运行，必须开启调试模式！线上版本需要关闭,否则有安全风险)
+            ARouter.openDebug();   
+        }
+        
+        // 初始化 ARouter
+        ARouter.init(this);
+        
+        // 其他操作 ...
+    }
+
+    private boolean isDebug() {
+        return BuildConfig.DEBUG;
+    }
+    
+    // 其他代码 ...
+}
+```
+
+这里我们以主项目跳登录界面，然后登录界面登录成功后跳分享组件的分享界面为例。其中分享功能还使用了我们上面提到的调用登录组件的 Service 对登录状态进行判断。
+
+首先，需要在登录和分享组件中分别添加 LoginActivity 和 ShareActivity ，然后分别为两个 Activity 添加注解 Route，其中 path 是跳转的路径，这里的路径需要注意的是至少需要有两级，/xx/xx
+
+```
+// Login 组件的 LoginActivity 
+@Route(path = "/account/login")
+public class LoginActivity extends AppCompatActivity {
+
+    private TextView tvState;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_login);
+
+        initView();
+        updateLoginState();
+    }
+
+    private void initView() {
+        tvState = (TextView) findViewById(R.id.tv_login_state);
+    }
+
+    public void login(View view) {
+        AccountUtils.userInfo = new UserInfo("10086", "Admin");
+        updateLoginState();
+    }
+
+    private void updateLoginState() {
+        tvState.setText("这里是登录界面：" + (AccountUtils.userInfo == null ? "未登录" : AccountUtils.userInfo.getUserName()));
+    }
+
+    public void exit(View view) {
+        AccountUtils.userInfo = null;
+        updateLoginState();
+    }
+
+    public void loginShare(View view) {
+        ARouter.getInstance().build("/share/share").withString("share_content", "分享数据到微博").navigation();
+    }
+}
+
+```
+
+```
+// Share 组件的 ShareActivity
+@Route(path = "/share/share")
+public class ShareActivity extends AppCompatActivity {
+    private TextView tvState;
+    private Button btnLogin, btnExit;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_login);
+
+        initView();
+        updateLoginState();
+    }
+
+    private void initView() {
+        tvState = (TextView) findViewById(R.id.tv_login_state);
+    }
+
+    public void login(View view) {
+        AccountUtils.userInfo = new UserInfo("10086", "Admin");
+        updateLoginState();
+    }
+
+    public void exit(View view) {
+        AccountUtils.userInfo = null;
+        updateLoginState();
+    }
+
+    public void loginShare(View view) {
+        ARouter.getInstance().build("/share/share").withString("share_content", "分享数据到微博").navigation();
+    }
+    
+    private void updateLoginState() {
+        tvState.setText("这里是登录界面：" + (AccountUtils.userInfo == null ? "未登录" : AccountUtils.userInfo.getUserName()));
+    }
+}
+```
+
+然后在 MainActivity 中通过 ARouter 跳转，其中build 处填的是 path 地址，withXXX 处填的是 Activity 跳转时携带的参数的 key 和 value，navigation 就是发射了路由跳转。
+
+```
+// 主项目的 MainActivity
+public class MainActivity extends AppCompatActivity {
+
+    @Override
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+    }
+
+    /**
+     * 跳登录界面
+     * @param view
+     */
+    public void login(View view){
+        ARouter.getInstance().build("/account/login").navigation();
+    }
+
+    /**
+     * 跳分享界面
+     * @param view
+     */
+    public void share(View view){
+        ARouter.getInstance().build("/share/share").withString("share_content", "分享数据到微博").navigation();
+    }
+}
+```
+
+如果研究过 ARouter 源码的同学可能知道，ARouter拥有自身的编译时注解框架，其跳转功能是通过编译时生成的辅助类完成的，最终的实现实际上还是调用了 startActivity。
+
+路由的另外一个重要作用就是过滤拦截，以 ARouter 为例，如果我们定义了过滤器，在模块跳转前会遍历所有的过滤器，然后通过判断跳转路径来找到需要拦截的跳转，比如上面我们提到的分享功能一般都是需要用户登录的，如果我们不想在所有分享的地方都添加登录状态的判断，我们就可以使用路由的过滤功能，我们就以这个功能来演示，我们可以定义一个简单的过滤器:
+
+```
+// Login 模块中的登录状态过滤拦截器
+@Interceptor(priority = 8, name = "登录状态拦截器")
+public class LoginInterceptor implements IInterceptor {
+
+    private Context context;
+
+    @Override
+    public void process(Postcard postcard, InterceptorCallback callback) {
+
+        // onContinue 和 onInterrupt 至少需要调用其中一种，否则不会继续路由
+        
+        if (postcard.getPath().equals("/share/share")) {
+            if (ServiceFactory.getInstance().getAccountService().isLogin()) {
+                callback.onContinue(postcard);  // 处理完成，交还控制权
+            } else {
+                callback.onInterrupt(new RuntimeException("请登录")); // 中断路由流程
+            }
+        } else {
+            callback.onContinue(postcard);  // 处理完成，交还控制权
+        }
+
+    }
+
+    @Override
+    public void init(Context context) {
+        // 拦截器的初始化，会在sdk初始化的时候调用该方法，仅会调用一次
+        this.context = context;
+    }
+}
+```
+
+自定义的过滤器需要通过 @Tnterceptor 来注解，priority 是优先级，name 是对这个拦截器的描述。以上代码中通过 Postcard 获取跳转的 path，然后通过 path 以及特定的需求来判断是否拦截，在这里是通过对登录状态的判断进行拦截，如果已经登录就继续跳转，如果未登录就拦截跳转。
+
+## 五、主项目如何在不直接访问组件中具体类的情况下使用组件的 Fragment
+
+除了 Activity 的跳转，我们在开发过程中也会经常使用 Fragment，一种很常见的样式就是应用主页 Activity 中包含了多个隶属不同组件的 Fragment。一般情况下，我们都是直接通过访问具体 Fragment 类的方式实现 Fragment 的实例化，但是现在为了实现模块与组件间的解耦，在移除组件时不会由于引用的 Fragment 不存在而编译失败，我们就不能模块中直接访问组件的 Fragment 类。
+
+这个问题我们依旧可以通过反射来解决，通过来初始化 Fragment 对象并返回给 Activity，在 Actiivty 中将 Fragment 添加到特定位置即可。
+
+也可以通过我们的 componentbase 模块来实现这个功能，我们可以把 Fragment 的初始化工作放到每一个组件中，模块需要使用组件的 Fragment 时，通过 componentbase 提供的 Service 中的方法来实现 Fragment 的初始化。
+
+这里我们通过第二种方式实现在 Login 组件中提供一个 UserFragment 来演示。
+
+首先，在 Login 组件中创建 UserFragment，然后在 IAccountService 接口中添加 newUserFragment 方法返回一个 Fragment，在 Login 组件中的 AccountService 和 componentbase 中 IAccountService 的空实现类中实现这个方法，然后在主模块中通过 ServiceFactory 获取 IAccountService 的实现类对象，调用其 newUserFragment 即可获取到 UserFragment 的实例。以下是主要代码：
+
+```
+// componentbase 模块的 IAccountService 
+public interface IAccountService {
+    // 其他代码 ...
+
+    /**
+     * 创建 UserFragment
+     * @param activity
+     * @param containerId
+     * @param manager
+     * @param bundle
+     * @param tag
+     * @return
+     */
+    Fragment newUserFragment(Activity activity, int containerId, FragmentManager manager, Bundle bundle, String tag);
+}
+
+// Login 组件中的 AccountService
+public class AccountService implements IAccountService {
+    // 其他代码 ...
+
+    @Override
+    public Fragment newUserFragment(Activity activity, int containerId, FragmentManager manager, Bundle bundle, String tag) {
+        FragmentTransaction transaction = manager.beginTransaction();
+        // 创建 UserFragment 实例，并添加到 Activity 中
+        Fragment userFragment = new UserFragment();
+        transaction.add(containerId, userFragment, tag);
+        transaction.commit();
+        return userFragment;
+    }
+}
+
+// 主模块的 FragmentActivity
+public class FragmentActivity extends AppCompatActivity {
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_fragment);
+        
+        // 通过组件提供的 Service 实现 Fragment 的实例化
+        ServiceFactory.getInstance().getAccountService().newUserFragment(this, R.id.layout_fragment, getSupportFragmentManager(), null, "");
+    }
+}
+```
+
+这样就实现了 Fragment 的实例化，满足了解耦的要求，并保证了业务分离是不会造成编译失败及 App 崩溃。
+
+
+## 六、组件集成调试
+
+上面解决的几个问题主要是组件开发过程中必须要解决的问题，当组件开发完成后我们可能需要将特定几个组件集成调试，而不是将所有的组件全部集成进行调试。这时候我们要满足只集成部分组件时可以编译通过，不会因为未集成某些组件而出现编译失败的问题。
+
+其实这个问题我们在解决上面几个问题的时候就已经解决了。不管是组件间还是模块与组件间都没有直接使用其中的类进行操作，而是通过 componentbase 模块中的 Service 来实现的，而 componentbase 模块中所有 Service 接口的空实现也保证了即使特定组件没有初始化，在其他组件调用其对应方法时也不会出现异常。这种面向接口编程的方式，满足了我们不管是组件间还是模块与组件间的相互解耦。
+
+这时候组件化的架构图就成了这样：
+
+![](http://odgw9c93i.bkt.clouddn.com//FgQqh07WSS0cSeT0qoBn5sLUgK5t)
+
+
+## 七、组件解耦的目标及代码隔离
+
+#### 解耦目标
+代码解耦的首要目标就是组件之间的完全隔离，在开发过程中我们要时刻牢记，我们不仅不能直接使用其他组件中的类，最好能根本不了解其中的实现细节。
+
+#### 代码隔离
+
+通过以上几个问题的解决方式可以看到，我们在极力的避免组件间及模块与组件间类的直接引用。不过即使通过 componentbase 中提供 Service 的方式解决了直接引用类的问题，但是我们在主项目通过 implementation 添加对 login 和 share 组件的依赖后，在主项目中依旧是可以访问到 login 和 share 组件中的类的。
+
+这种情况下即使我们的目标是面向接口编程，但是只要能直接访问到组件中的类，就存在有意或无意的直接通过访问类的方式使用到组件中的代码的可能，如果真的出现了这种情况，我们上面说的解耦就会完全白做了。
+
+我们希望的组件依赖是只有在打包过程中才能直接引用组件中的类，在开发阶段，所有组件中的类我们都是不可以访问的。只有实现了这个目标，才能从根本上杜绝直接引用组件中类的问题。
+
+这个问题我们可以通过 Gradle 提供的方式来解决，Gradle 3.0 提供了新的依赖方式 runtimeOnly ，通过 runtimeOnly 方式依赖时，依赖项仅在运行时对模块及其消费者可用，编译期间依赖项的代码对其消费者时完全隔离的。
+
+所以我们将主项目中对 Login 组件和 Share 组件的依赖方式修改为 runtimeOnly 的方式就可以解决开发阶段可以直接引用到组件中类的问题。
+
+```
+// 主项目的 build.gradle
+dependencies {
+    // 其他依赖 ...
+    runtimeOnly project(':login')
+    runtimeOnly project(':share')
+}
+```
+
+解决了代码隔离的问题，另一个问题就会又浮现出来。组件开发中不仅要实现代码的隔离，还要实现资源文件的隔离。解决代码隔离的 runtimeOnly 并不能做到资源隔离。通过 runtimeOnly 依赖组件后，在主项目中还是可以直接使用到组件中的资源文件。
+
+为了解决这个问题，我们可以在每个组件的 build.gradle 中添加 resourcePrefix 配置来固定这个组件中的资源前缀。不过 resourcePrefix 配置只能限定 res 中 xml 文件中定义的资源，并不能限定图片资源，所以我们在往组件中添加图片资源时要手动限制资源前缀。并将多个组件中都会用到的资源放入 Base 模块中。这样我们就可以在最大限度上实现组件间资源的隔离。
+
+如果组件配置了 resourcePrefix ，其 xml 中定义的资源没有以 resourcePrefix 的值作为前缀，在对应的 xml 中定义的资源会报红。resourcePrefix 的值就是指定的组件中 xml 资源的前缀。以 Login 组件为例：
+
+```
+// Login 组件的 build.gradle
+android {
+    resourcePrefix "login_"
+    // 其他配置 ...
+}
+```
+
+Login 组件中添加 resourcePrefix 配置后，我们会发现 res 中 xml 定义的资源都报红：
+
+![](http://odgw9c93i.bkt.clouddn.com//FjLyHn3wjCMqG381kucDTjNR40A7)
+
+而我们修改前缀后则报红消失，显示恢复正常：
+
+![](http://odgw9c93i.bkt.clouddn.com//Fnj_tLG4i627C25GY_S23eU6_gql)
+
+到这里解决了组件间代码及资源隔离的问题也就解决了。
+
+
+## 八、总结
+
+解决了上面提到的六个问题，组件化开发中遇到的主要问题也就全部解决了。其中最关键的就是模块与组件间的解耦。在设计之初也参考了目前主流的几种组件化方案，后来从使用难度、理解难度、维护难度、扩展难度等方面考虑，最终确定了目前的组件化方案。
+
+![](http://odgw9c93i.bkt.clouddn.com//FmkhuM5aV97FZBUO_w_nEyOTCrFK)
+
+
+
+
+
+
+
+
+
+
+
+
+
