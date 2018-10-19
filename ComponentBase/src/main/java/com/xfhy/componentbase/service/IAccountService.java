@@ -1,5 +1,10 @@
 package com.xfhy.componentbase.service;
 
+import android.app.Activity;
+import android.os.Bundle;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentManager;
+
 /**
  * Created by feiyang on 2018/10/18 14:47
  * Description : 组件Service接口定义
@@ -17,4 +22,9 @@ public interface IAccountService {
      * 获取登录用户的 AccountId
      */
     String getAccountId();
+
+    /**
+     * 创建 UserFragment
+     */
+    Fragment newUserFragment(Activity activity, int containerId, FragmentManager manager, Bundle bundle, String tag);
 }
